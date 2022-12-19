@@ -88,11 +88,11 @@
 #define cyw43_schedule_internal_poll_dispatch(func) pendsv_schedule_dispatch(PENDSV_DISPATCH_CYW43, func)
 
 void cyw43_post_poll_hook(void);
-int cyw43_has_pending(void);
+extern volatile int cyw43_has_pending;
 
 static inline void cyw43_yield(void) {
     uint32_t my_interrupts = save_and_disable_interrupts();
-    if (!cyw43_has_pending()) {
+    if (!cyw43_has_pending) {
         __WFI();
     }
     restore_interrupts(my_interrupts);

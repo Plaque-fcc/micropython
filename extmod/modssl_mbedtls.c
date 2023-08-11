@@ -59,6 +59,7 @@ typedef struct _mp_obj_ssl_context_t {
     mbedtls_x509_crt cert;
     mbedtls_pk_context pkey;
     int authmode;
+    mp_obj_t handler;
 } mp_obj_ssl_context_t;
 
 // This corresponds to an SSLSocket object.
@@ -195,6 +196,21 @@ STATIC mp_obj_t ssl_context_make_new(const mp_obj_type_t *type_in, size_t n_args
 
     return MP_OBJ_FROM_PTR(self);
 }
+STATIC int ssl_sock_cert_vrfy(void *ptr, mbedtls_x509_crt *crt, int depth, uint32_t *flags) {
+    mp_obj_ssl_socket_t *o = ptr;
+    if (o->ssl_context->handler == mp_const_none) {
+        return 0;
+    }
+    return mp_obj_get_int(mp_call_function_2(o->ssl_context->handler, mp_obj_new_bytes(crt->raw.p, crt->raw.len), MP_OBJ_NEW_SMALL_INT(depth)));
+}
+
+STATIC void ssl_context_set_cert_callback(mp_obj_ssl_context_t *self, mp_obj_t handler_in) {
+    if (handler_in != mp_const_none && !mp_obj_is_callable(handler_in)) {
+        mp_raise_ValueError(MP_ERROR_TEXT("invalid handler"));
+    }
+    self->handler = handler_in;
+}
+
 
 STATIC void ssl_context_attr(mp_obj_t self_in, qstr attr, mp_obj_t *dest) {
     mp_obj_ssl_context_t *self = MP_OBJ_TO_PTR(self_in);
@@ -202,6 +218,8 @@ STATIC void ssl_context_attr(mp_obj_t self_in, qstr attr, mp_obj_t *dest) {
         // Load attribute.
         if (attr == MP_QSTR_verify_mode) {
             dest[0] = MP_OBJ_NEW_SMALL_INT(self->authmode);
+        } else if (attr == MP_QSTR_cert_callback) {
+            dest[0] = self->handler;
         } else {
             // Continue lookup in locals_dict.
             dest[1] = MP_OBJ_SENTINEL;
@@ -212,6 +230,9 @@ STATIC void ssl_context_attr(mp_obj_t self_in, qstr attr, mp_obj_t *dest) {
             self->authmode = mp_obj_get_int(dest[1]);
             dest[0] = MP_OBJ_NULL;
             mbedtls_ssl_conf_authmode(&self->conf, self->authmode);
+        } else if (attr == MP_QSTR_cert_callback) {
+            dest[0] = MP_OBJ_NULL;
+            ssl_context_set_cert_callback(self, dest[1]);
         }
     }
 }
@@ -361,6 +382,7 @@ STATIC mp_obj_t ssl_socket_make_new(mp_obj_ssl_context_t *ssl_context, mp_obj_t 
     o->sock = sock;
     o->poll_mask = 0;
     o->last_error = 0;
+    o->ssl_context = ssl_context;
 
     int ret;
     mbedtls_ssl_init(&o->ssl);
@@ -377,7 +399,7 @@ STATIC mp_obj_t ssl_socket_make_new(mp_obj_ssl_context_t *ssl_context, mp_obj_t 
             goto cleanup;
         }
     }
-
+    mbedtls_ssl_set_verify(&o->ssl, &ssl_sock_cert_vrfy, o);
     mbedtls_ssl_set_bio(&o->ssl, &o->sock, _mbedtls_ssl_send, _mbedtls_ssl_recv, NULL);
 
     if (do_handshake_on_connect) {
@@ -397,19 +419,6 @@ cleanup:
     mbedtls_ssl_free(&o->ssl);
     mbedtls_raise_error(ret);
 }
-
-STATIC mp_obj_t mod_ssl_getpeercert(mp_obj_t o_in, mp_obj_t binary_form) {
-    mp_obj_ssl_socket_t *o = MP_OBJ_TO_PTR(o_in);
-    if (!mp_obj_is_true(binary_form)) {
-        mp_raise_NotImplementedError(NULL);
-    }
-    const mbedtls_x509_crt *peer_cert = mbedtls_ssl_get_peer_cert(&o->ssl);
-    if (peer_cert == NULL) {
-        return mp_const_none;
-    }
-    return mp_obj_new_bytes(peer_cert->raw.p, peer_cert->raw.len);
-}
-STATIC MP_DEFINE_CONST_FUN_OBJ_2(mod_ssl_getpeercert_obj, mod_ssl_getpeercert);
 
 STATIC mp_uint_t socket_read(mp_obj_t o_in, void *buf, mp_uint_t size, int *errcode) {
     mp_obj_ssl_socket_t *o = MP_OBJ_TO_PTR(o_in);
@@ -551,7 +560,6 @@ STATIC const mp_rom_map_elem_t ssl_socket_locals_dict_table[] = {
     #if MICROPY_UNIX_COVERAGE
     { MP_ROM_QSTR(MP_QSTR_ioctl), MP_ROM_PTR(&mp_stream_ioctl_obj) },
     #endif
-    { MP_ROM_QSTR(MP_QSTR_getpeercert), MP_ROM_PTR(&mod_ssl_getpeercert_obj) },
 };
 STATIC MP_DEFINE_CONST_DICT(ssl_socket_locals_dict, ssl_socket_locals_dict_table);
 
@@ -581,6 +589,7 @@ STATIC mp_obj_t mod_ssl_wrap_socket(size_t n_args, const mp_obj_t *pos_args, mp_
         ARG_cert_reqs,
         ARG_cadata,
         ARG_do_handshake,
+        ARG_cert_callback,
     };
     static const mp_arg_t allowed_args[] = {
         { MP_QSTR_key, MP_ARG_KW_ONLY | MP_ARG_OBJ, {.u_rom_obj = MP_ROM_NONE} },
@@ -590,6 +599,7 @@ STATIC mp_obj_t mod_ssl_wrap_socket(size_t n_args, const mp_obj_t *pos_args, mp_
         { MP_QSTR_cert_reqs, MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = MBEDTLS_SSL_VERIFY_NONE}},
         { MP_QSTR_cadata, MP_ARG_KW_ONLY | MP_ARG_OBJ, {.u_rom_obj = MP_ROM_NONE} },
         { MP_QSTR_do_handshake, MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = true} },
+        { MP_QSTR_cert_callback, MP_ARG_KW_ONLY | MP_ARG_OBJ, {.u_rom_obj = MP_ROM_NONE} },
     };
 
     // Parse arguments.
@@ -610,6 +620,9 @@ STATIC mp_obj_t mod_ssl_wrap_socket(size_t n_args, const mp_obj_t *pos_args, mp_
     // Set the verify_mode.
     mp_obj_t dest[2] = { MP_OBJ_SENTINEL, MP_OBJ_NEW_SMALL_INT(args[ARG_cert_reqs].u_int) };
     ssl_context_attr(MP_OBJ_FROM_PTR(ssl_context), MP_QSTR_verify_mode, dest);
+    mp_obj_t dest2[2] = { MP_OBJ_SENTINEL, args[ARG_cert_callback].u_obj };
+    ssl_context_attr(MP_OBJ_FROM_PTR(ssl_context), MP_QSTR_cert_callback, dest2);
+
 
     // Load cadata if given.
     if (args[ARG_cadata].u_obj != mp_const_none) {

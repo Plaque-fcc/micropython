@@ -3,6 +3,7 @@ name: esp32 port
 env:
   # GitHub tag of ESP-IDF to use for CI (note: must be a tag or a branch)
   IDF_VER: v5.0.2
+  IDF_CCACHE_ENABLE: 1
 
 on:
   push:
@@ -49,6 +50,11 @@ jobs:
     - name: Install ESP-IDF packages
       if: steps.cache-esp-idf.outputs.cache-hit != 'true'
       run: source tools/ci.sh && ci_esp32_idf50_setup
+
+    - name: ccache
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        key: esp32-${{ matrix.board }}
 
     - name: Build
       run: source tools/ci.sh && ci_esp32_build "${{ matrix.board }}"

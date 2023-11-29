@@ -127,6 +127,16 @@ function ci_esp32_idf50_setup {
     ./esp-idf/install.sh
 }
 
+
+function ci_esp32_idf50_setup {
+    pip3 install pyelftools
+    git clone --depth 1 --branch $IDF_VER https://github.com/espressif/esp-idf.git
+    # doing a treeless clone isn't quite as good as --shallow-submodules, but it
+    # is smaller than full clones and works when the submodule commit isn't a head.
+    git submodule update --init --recursive --filter=tree:0
+    ./esp-idf/install.sh
+}
+
 function ci_esp32_build {  # arg: board name or ""
     source esp-idf/export.sh
     make ${MAKEOPTS} -C mpy-cross

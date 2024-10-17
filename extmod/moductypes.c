@@ -647,6 +647,39 @@ static mp_obj_t uctypes_struct_bytes_at(mp_obj_t ptr, mp_obj_t size) {
 }
 MP_DEFINE_CONST_FUN_OBJ_2(uctypes_struct_bytes_at_obj, uctypes_struct_bytes_at);
 
+static __attribute__((__naked__)) mp_int_t uctypes_call_(mp_int_t *args){
+__asm__(R"(
+lw t0,  0(a0)
+lw a1,  8(a0)
+lw a2, 12(a0)
+lw a3, 16(a0)
+lw a4, 20(a0)
+lw a5, 24(a0)
+lw a6, 28(a0)
+lw a7, 32(a0)
+lw a0,  4(a0)
+jr t0
+)");
+}
+
+static mp_obj_t uctypes_call(size_t n_args, const mp_obj_t *args) {
+    mp_int_t tmp[9];
+
+    for(size_t i = 0; i < 9; ++i){
+        if(i >= n_args){
+            tmp[i] = 0;
+            continue;
+        }
+
+        mp_obj_t o = args[i];
+        mp_check_self(mp_obj_is_int(o));
+        tmp[i] = mp_obj_get_int(o);
+    }
+
+    return mp_obj_new_int(uctypes_call_(tmp));
+}
+MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(uctypes_call_obj, 1, 9, uctypes_call);
+
 static MP_DEFINE_CONST_OBJ_TYPE(
     uctypes_struct_type,
     MP_QSTR_struct,
@@ -666,6 +699,7 @@ static const mp_rom_map_elem_t mp_module_uctypes_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_addressof), MP_ROM_PTR(&uctypes_struct_addressof_obj) },
     { MP_ROM_QSTR(MP_QSTR_bytes_at), MP_ROM_PTR(&uctypes_struct_bytes_at_obj) },
     { MP_ROM_QSTR(MP_QSTR_bytearray_at), MP_ROM_PTR(&uctypes_struct_bytearray_at_obj) },
+    { MP_ROM_QSTR(MP_QSTR_call), MP_ROM_PTR(&uctypes_call_obj) },
 
     { MP_ROM_QSTR(MP_QSTR_NATIVE), MP_ROM_INT(LAYOUT_NATIVE) },
     { MP_ROM_QSTR(MP_QSTR_LITTLE_ENDIAN), MP_ROM_INT(LAYOUT_LITTLE_ENDIAN) },
